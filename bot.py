@@ -191,9 +191,83 @@ async def chiudi_torneo(interaction: discord.Interaction):
         "Torneo chiuso e tutti i canali eliminati."
     )
 
+@bot.tree.command(
+    name="sposta_qui",
+    description="Sposta tutti gli utenti di un canale nella tua voice"
+)
+@app_commands.describe(
+    sorgente="Canale vocale da cui spostare gli utenti"
+)
+@app_commands.default_permissions(administrator=True)
+async def sposta_qui(
+    interaction: discord.Interaction,
+    sorgente: discord.VoiceChannel
+):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "Non hai i permessi per usare questo comando.",
+            ephemeral=True
+        )
+        return
+
+    if not isinstance(interaction.user, discord.Member) or not interaction.user.voice:
+        await interaction.response.send_message(
+            "Devi essere in un canale vocale per usare questo comando.",
+            ephemeral=True
+        )
+        return
+
+    destinazione = interaction.user.voice.channel
+
+    if sorgente.id == destinazione.id:
+        await interaction.response.send_message(
+            "Sei già in quel canale.",
+            ephemeral=True
+        )
+        return
+
+    membri = list(sorgente.members)
+
+    if not membri:
+        await interaction.response.send_message(
+            f"Non c'è nessuno in {sorgente.mention}.",
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    spostati = 0
+    errori = []
+
+    for membro in membri:
+        try:
+            await membro.move_to(
+                destinazione,
+                reason=f"Spostamento richiesto da {interaction.user}"
+            )
+            spostati += 1
+        except discord.Forbidden:
+            errori.append(membro.display_name)
+        except discord.HTTPException:
+            errori.append(membro.display_name)
+
+    msg = (
+        f"Ho spostato **{spostati}** utenti "
+        f"da {sorgente.mention} a {destinazione.mention}."
+    )
+
+    if errori:
+        msg += "\n\nNon sono riuscito a spostare:\n- " + "\n- ".join(errori[:10])
+        if len(errori) > 10:
+            msg += f"\n...e altri {len(errori) - 10}"
+
+    await interaction.followup.send(msg, ephemeral=True)
+
 token = os.getenv("DISCORD_TOKEN")
 if not token:
     raise RuntimeError("Variabile DISCORD_TOKEN non trovata.")
 
 bot.run(token)
+
 

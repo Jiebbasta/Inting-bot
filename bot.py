@@ -3,6 +3,8 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
+GUILD_ID = 1479164434197778442
+
 intents = discord.Intents.default()
 intents.guilds = True
 intents.voice_states = True
@@ -10,17 +12,27 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-
 @bot.event
 async def on_ready():
     try:
-        synced = await bot.tree.sync()
-        print(f"Comandi sincronizzati: {len(synced)}")
+        guild = discord.Object(id=GUILD_ID)
+
+        # pulisce eventuali comandi guild vecchi
+        bot.tree.clear_commands(guild=guild)
+
+        # ricopia i comandi globali nella tua guild
+        bot.tree.copy_global_to(guild=guild)
+
+        # sincronizza nella tua guild
+        synced = await bot.tree.sync(guild=guild)
+
+        print(f"Comandi sincronizzati nella guild: {len(synced)}")
+        print("Comandi registrati:", [cmd.name for cmd in synced])
+
     except Exception as e:
         print(f"Errore sync comandi: {e}")
 
     print(f"Bot online come {bot.user}")
-
 
 @bot.tree.command(
     name="sposta_tutti",
@@ -184,3 +196,4 @@ if not token:
     raise RuntimeError("Variabile DISCORD_TOKEN non trovata.")
 
 bot.run(token)
+

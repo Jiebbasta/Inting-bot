@@ -92,10 +92,27 @@ class MonthSelect(discord.ui.Select):
         view.selected_month = int(self.values[0])
         await interaction.response.edit_message(view=view)
 
-class DaySelect(discord.ui.Select):
+class DaySelectFirstHalf(discord.ui.Select):
     def __init__(self):
-        options = [discord.SelectOption(label=str(day), value=str(day)) for day in range(1, 32)]
-        super().__init__(placeholder="Seleziona il giorno", options=options)
+        options = [
+            discord.SelectOption(label=str(day), value=str(day))
+            for day in range(1, 16)
+        ]
+        super().__init__(placeholder="Seleziona il giorno (1-15)", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        view.selected_day = int(self.values[0])
+        await interaction.response.edit_message(view=view)
+
+
+class DaySelectSecondHalf(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=str(day), value=str(day))
+            for day in range(16, 32)
+        ]
+        super().__init__(placeholder="Seleziona il giorno (16-31)", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         view = self.view
@@ -112,6 +129,14 @@ class SaveBirthdayButton(discord.ui.Button):
         if view.selected_month is None or view.selected_day is None:
             await interaction.response.send_message(
                 "Devi selezionare sia il mese sia il giorno.",
+                ephemeral=True
+            )
+            return
+
+        max_days = calendar.monthrange(2024, view.selected_month)[1]
+        if view.selected_day > max_days:
+            await interaction.response.send_message(
+                "La data selezionata non è valida per quel mese.",
                 ephemeral=True
             )
             return
@@ -138,7 +163,8 @@ class BirthdayView(discord.ui.View):
         self.selected_day = None
 
         self.add_item(MonthSelect())
-        self.add_item(DaySelect())
+        self.add_item(DaySelectFirstHalf())
+        self.add_item(DaySelectSecondHalf())
         self.add_item(SaveBirthdayButton())
 
 @bot.tree.command(
@@ -474,3 +500,4 @@ if not token:
     raise RuntimeError("Variabile DISCORD_TOKEN non trovata.")
 
 bot.run(token)
+

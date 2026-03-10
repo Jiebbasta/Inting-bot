@@ -80,9 +80,13 @@ async def on_ready():
         birthday_checker.start()
 
 class MonthSelect(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, selected_month=None):
         options = [
-            discord.SelectOption(label=month_name, value=str(month_number))
+            discord.SelectOption(
+                label=month_name,
+                value=str(month_number),
+                default=(selected_month == month_number)
+            )
             for month_name, month_number in MONTHS
         ]
         super().__init__(placeholder="Seleziona il mese", options=options)
@@ -90,12 +94,18 @@ class MonthSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         view = self.view
         view.selected_month = int(self.values[0])
+        view.refresh_items()
         await interaction.response.edit_message(view=view)
 
+
 class DaySelectFirstHalf(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, selected_day=None):
         options = [
-            discord.SelectOption(label=str(day), value=str(day))
+            discord.SelectOption(
+                label=str(day),
+                value=str(day),
+                default=(selected_day == day)
+            )
             for day in range(1, 16)
         ]
         super().__init__(placeholder="Seleziona il giorno (1-15)", options=options)
@@ -103,13 +113,18 @@ class DaySelectFirstHalf(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         view = self.view
         view.selected_day = int(self.values[0])
+        view.refresh_items()
         await interaction.response.edit_message(view=view)
 
 
 class DaySelectSecondHalf(discord.ui.Select):
-    def __init__(self):
+    def __init__(self, selected_day=None):
         options = [
-            discord.SelectOption(label=str(day), value=str(day))
+            discord.SelectOption(
+                label=str(day),
+                value=str(day),
+                default=(selected_day == day)
+            )
             for day in range(16, 32)
         ]
         super().__init__(placeholder="Seleziona il giorno (16-31)", options=options)
@@ -117,14 +132,19 @@ class DaySelectSecondHalf(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         view = self.view
         view.selected_day = int(self.values[0])
+        view.refresh_items()
         await interaction.response.edit_message(view=view)
 
+
 class SaveBirthdayButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="Salva compleanno", style=discord.ButtonStyle.green)
+    def __init__(self, mode="create"):
+        label = "Salva compleanno" if mode == "create" else "Aggiorna compleanno"
+        super().__init__(label=label, style=discord.ButtonStyle.green)
+        self.mode = mode
 
     async def callback(self, interaction: discord.Interaction):
         view = self.view
+        user_id = str(interaction.user.id)
 
         if view.selected_month is None or view.selected_day is None:
             await interaction.response.send_message(
@@ -141,31 +161,41 @@ class SaveBirthdayButton(discord.ui.Button):
             )
             return
 
-        user_id = str(interaction.user.id)
+        if self.mode == "create" and user_id in birthdays:
+            await interaction.response.send_message(
+                "Hai già impostato il tuo compleanno. Usa `/cambia_compleanno` per modificarlo.",
+                ephemeral=True
+            )
+            return
 
         birthdays[user_id] = {
             "month": view.selected_month,
             "day": view.selected_day
         }
-
         save_json(BIRTHDAYS_FILE, birthdays)
 
+        testo = "Compleanno salvato" if self.mode == "create" else "Compleanno aggiornato"
+
         await interaction.response.send_message(
-            f"Compleanno salvato: **{view.selected_day:02d}/{view.selected_month:02d}**",
+            f"{testo}: **{view.selected_day:02d}/{view.selected_month:02d}**",
             ephemeral=True
         )
 
+
 class BirthdayView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, selected_month=None, selected_day=None, mode="create"):
         super().__init__(timeout=300)
+        self.selected_month = selected_month
+        self.selected_day = selected_day
+        self.mode = mode
+        self.refresh_items()
 
-        self.selected_month = None
-        self.selected_day = None
-
-        self.add_item(MonthSelect())
-        self.add_item(DaySelectFirstHalf())
-        self.add_item(DaySelectSecondHalf())
-        self.add_item(SaveBirthdayButton())
+    def refresh_items(self):
+        self.clear_items()
+        self.add_item(MonthSelect(self.selected_month))
+        self.add_item(DaySelectFirstHalf(self.selected_day))
+        self.add_item(DaySelectSecondHalf(self.selected_day))
+        self.add_item(SaveBirthdayButton(self.mode))
 
 @bot.tree.command(
     name="sposta_tutti",
@@ -402,10 +432,46 @@ async def sposta_qui(
     description="Imposta il tuo compleanno"
 )
 async def compleanno(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+
+    if user_id in birthdays:
+        data = birthdays[user_id]
+        await interaction.response.send_message(
+            f"Hai già impostato il tuo compleanno al **{data['day']:02d}/{data['month']:02d}**.\n"
+            f"Usa `/cambia_compleanno` se vuoi modificarlo.",
+            ephemeral=True
+        )
+        return
 
     await interaction.response.send_message(
         "Seleziona mese e giorno del tuo compleanno:",
-        view=BirthdayView(),
+        view=BirthdayView(mode="create"),
+        ephemeral=True
+    )
+
+@bot.tree.command(
+    name="cambia_compleanno",
+    description="Modifica il tuo compleanno"
+)
+async def cambia_compleanno(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+
+    if user_id not in birthdays:
+        await interaction.response.send_message(
+            "Non hai ancora impostato il tuo compleanno. Usa `/compleanno`.",
+            ephemeral=True
+        )
+        return
+
+    data = birthdays[user_id]
+
+    await interaction.response.send_message(
+        "Modifica mese e giorno del tuo compleanno:",
+        view=BirthdayView(
+            selected_month=data["month"],
+            selected_day=data["day"],
+            mode="edit"
+        ),
         ephemeral=True
     )
 
@@ -495,9 +561,63 @@ async def birthday_checker():
                 birthday_sent[today_key].append(unique_key)
                 save_json(BIRTHDAY_SENT_FILE, birthday_sent)
 
+@bot.tree.command(
+    name="lista_compleanni",
+    description="Mostra la lista dei compleanni salvati"
+)
+async def lista_compleanni(interaction: discord.Interaction):
+    membri_compleanni = []
+
+    for user_id, data in birthdays.items():
+        member = interaction.guild.get_member(int(user_id))
+        if member is not None:
+            membri_compleanni.append((data["month"], data["day"], member.display_name))
+
+    if not membri_compleanni:
+        await interaction.response.send_message(
+            "Non ci sono compleanni salvati in questo server.",
+            ephemeral=True
+        )
+        return
+
+    membri_compleanni.sort(key=lambda x: (x[0], x[1], x[2].lower()))
+
+    testo = "\n".join(
+        f"**{day:02d}/{month:02d}** - {name}"
+        for month, day, name in membri_compleanni
+    )
+
+    if len(testo) > 1900:
+        righe = []
+        parte = ""
+        for month, day, name in membri_compleanni:
+            riga = f"**{day:02d}/{month:02d}** - {name}\n"
+            if len(parte) + len(riga) > 1900:
+                righe.append(parte)
+                parte = riga
+            else:
+                parte += riga
+        if parte:
+            righe.append(parte)
+
+        await interaction.response.send_message(
+            f"**Lista compleanni:**\n{righe[0]}",
+            ephemeral=False
+        )
+
+        for chunk in righe[1:]:
+            await interaction.followup.send(chunk, ephemeral=False)
+        return
+
+    await interaction.response.send_message(
+        f"**Lista compleanni:**\n{testo}",
+        ephemeral=False
+    )
+
 token = os.getenv("DISCORD_TOKEN")
 if not token:
     raise RuntimeError("Variabile DISCORD_TOKEN non trovata.")
 
 bot.run(token)
+
 

@@ -1,5 +1,9 @@
 import os
 import discord
+import json
+import calendar
+from datetime import datetime
+from discord.ext import tasks
 from discord.ext import commands
 from discord import app_commands
 
@@ -11,6 +15,44 @@ intents.voice_states = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+BIRTHDAYS_FILE = "birthdays.json"
+BIRTHDAY_SETTINGS_FILE = "birthday_settings.json"
+BIRTHDAY_SENT_FILE = "birthday_sent.json"
+
+
+def load_json(filename, default):
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return default
+
+
+def save_json(filename, data):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+
+birthdays = load_json(BIRTHDAYS_FILE, {})
+birthday_settings = load_json(BIRTHDAY_SETTINGS_FILE, {})
+birthday_sent = load_json(BIRTHDAY_SENT_FILE, {})
+
+
+MONTHS = [
+    ("Gennaio", 1),
+    ("Febbraio", 2),
+    ("Marzo", 3),
+    ("Aprile", 4),
+    ("Maggio", 5),
+    ("Giugno", 6),
+    ("Luglio", 7),
+    ("Agosto", 8),
+    ("Settembre", 9),
+    ("Ottobre", 10),
+    ("Novembre", 11),
+    ("Dicembre", 12),
+]
 
 @bot.event
 async def on_ready():
@@ -33,6 +75,71 @@ async def on_ready():
         print(f"Errore sync comandi: {e}")
 
     print(f"Bot online come {bot.user}")
+
+    if not birthday_checker.is_running():
+        birthday_checker.start()
+
+class MonthSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=month_name, value=str(month_number))
+            for month_name, month_number in MONTHS
+        ]
+        super().__init__(placeholder="Seleziona il mese", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        view.selected_month = int(self.values[0])
+        await interaction.response.edit_message(view=view)
+
+class DaySelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=str(day), value=str(day)) for day in range(1, 32)]
+        super().__init__(placeholder="Seleziona il giorno", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+        view.selected_day = int(self.values[0])
+        await interaction.response.edit_message(view=view)
+
+class SaveBirthdayButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Salva compleanno", style=discord.ButtonStyle.green)
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+
+        if view.selected_month is None or view.selected_day is None:
+            await interaction.response.send_message(
+                "Devi selezionare sia il mese sia il giorno.",
+                ephemeral=True
+            )
+            return
+
+        user_id = str(interaction.user.id)
+
+        birthdays[user_id] = {
+            "month": view.selected_month,
+            "day": view.selected_day
+        }
+
+        save_json(BIRTHDAYS_FILE, birthdays)
+
+        await interaction.response.send_message(
+            f"Compleanno salvato: **{view.selected_day:02d}/{view.selected_month:02d}**",
+            ephemeral=True
+        )
+
+class BirthdayView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=300)
+
+        self.selected_month = None
+        self.selected_day = None
+
+        self.add_item(MonthSelect())
+        self.add_item(DaySelect())
+        self.add_item(SaveBirthdayButton())
 
 @bot.tree.command(
     name="sposta_tutti",
@@ -264,10 +371,106 @@ async def sposta_qui(
 
     await interaction.followup.send(msg, ephemeral=True)
 
+@bot.tree.command(
+    name="compleanno",
+    description="Imposta il tuo compleanno"
+)
+async def compleanno(interaction: discord.Interaction):
+
+    await interaction.response.send_message(
+        "Seleziona mese e giorno del tuo compleanno:",
+        view=BirthdayView(),
+        ephemeral=True
+    )
+
+@bot.tree.command(
+    name="set_birthday_chat",
+    description="Imposta il canale degli auguri"
+)
+@app_commands.default_permissions(administrator=True)
+async def set_birthday_chat(interaction: discord.Interaction, canale: discord.TextChannel):
+
+    guild_id = str(interaction.guild.id)
+
+    if guild_id not in birthday_settings:
+        birthday_settings[guild_id] = {}
+
+    birthday_settings[guild_id]["channel_id"] = canale.id
+
+    save_json(BIRTHDAY_SETTINGS_FILE, birthday_settings)
+
+    await interaction.response.send_message(
+        f"Canale compleanni impostato su {canale.mention}",
+        ephemeral=True
+    )
+
+@bot.tree.command(
+    name="set_birthday_message",
+    description="Imposta il messaggio di compleanno"
+)
+@app_commands.default_permissions(administrator=True)
+async def set_birthday_message(interaction: discord.Interaction, messaggio: str):
+
+    guild_id = str(interaction.guild.id)
+
+    if guild_id not in birthday_settings:
+        birthday_settings[guild_id] = {}
+
+    birthday_settings[guild_id]["message"] = messaggio
+
+    save_json(BIRTHDAY_SETTINGS_FILE, birthday_settings)
+
+    await interaction.response.send_message(
+        "Messaggio compleanno salvato.",
+        ephemeral=True
+    )
+
+@tasks.loop(hours=24)
+async def birthday_checker():
+    today = datetime.utcnow()
+    today_key = today.strftime("%m-%d")
+
+    if today_key not in birthday_sent:
+        birthday_sent[today_key] = []
+
+    for guild in bot.guilds:
+        guild_id = str(guild.id)
+        settings = birthday_settings.get(guild_id)
+
+        if not settings:
+            continue
+
+        channel = guild.get_channel(settings.get("channel_id"))
+
+        if not channel:
+            continue
+
+        message_template = settings.get(
+            "message",
+            "🎉 Auguri di buon compleanno {user}! 🎂"
+        )
+
+        for user_id, data in birthdays.items():
+            if data["month"] == today.month and data["day"] == today.day:
+                member = guild.get_member(int(user_id))
+
+                if member is None:
+                    continue
+
+                unique_key = f"{guild.id}-{member.id}"
+
+                if unique_key in birthday_sent[today_key]:
+                    continue
+
+                message = message_template.replace("{user}", member.mention)
+
+                await channel.send(message)
+
+                birthday_sent[today_key].append(unique_key)
+                save_json(BIRTHDAY_SENT_FILE, birthday_sent)
+
 token = os.getenv("DISCORD_TOKEN")
 if not token:
     raise RuntimeError("Variabile DISCORD_TOKEN non trovata.")
 
 bot.run(token)
-
-

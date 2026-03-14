@@ -137,14 +137,15 @@ class DaySelectSecondHalf(discord.ui.Select):
 
 
 class SaveBirthdayButton(discord.ui.Button):
-    def __init__(self, mode="create"):
+    def __init__(self, mode="create", target_user_id=None):
         label = "Salva compleanno" if mode == "create" else "Aggiorna compleanno"
         super().__init__(label=label, style=discord.ButtonStyle.green)
         self.mode = mode
+        self.target_user_id = target_user_id
 
     async def callback(self, interaction: discord.Interaction):
         view = self.view
-        user_id = str(interaction.user.id)
+        user_id = str(self.target_user_id or interaction.user.id)
 
         if view.selected_month is None or view.selected_day is None:
             await interaction.response.send_message(
@@ -163,7 +164,7 @@ class SaveBirthdayButton(discord.ui.Button):
 
         if self.mode == "create" and user_id in birthdays:
             await interaction.response.send_message(
-                "Hai già impostato il tuo compleanno. Usa `/cambia_compleanno` per modificarlo.",
+                "Questo compleanno è già impostato. Usa il comando di modifica.",
                 ephemeral=True
             )
             return
@@ -174,20 +175,23 @@ class SaveBirthdayButton(discord.ui.Button):
         }
         save_json(BIRTHDAYS_FILE, birthdays)
 
+        membro = interaction.guild.get_member(int(user_id))
+        nome = membro.mention if membro else f"<@{user_id}>"
+
         testo = "Compleanno salvato" if self.mode == "create" else "Compleanno aggiornato"
 
         await interaction.response.send_message(
-            f"{testo}: **{view.selected_day:02d}/{view.selected_month:02d}**",
+            f"{testo} per {nome}: **{view.selected_day:02d}/{view.selected_month:02d}**",
             ephemeral=True
         )
 
-
 class BirthdayView(discord.ui.View):
-    def __init__(self, selected_month=None, selected_day=None, mode="create"):
+    def __init__(self, selected_month=None, selected_day=None, mode="create", target_user_id=None):
         super().__init__(timeout=300)
         self.selected_month = selected_month
         self.selected_day = selected_day
         self.mode = mode
+        self.target_user_id = target_user_id
         self.refresh_items()
 
     def refresh_items(self):
@@ -195,7 +199,7 @@ class BirthdayView(discord.ui.View):
         self.add_item(MonthSelect(self.selected_month))
         self.add_item(DaySelectFirstHalf(self.selected_day))
         self.add_item(DaySelectSecondHalf(self.selected_day))
-        self.add_item(SaveBirthdayButton(self.mode))
+        self.add_item(SaveBirthdayButton(self.mode, self.target_user_id))
 
 @bot.tree.command(
     name="sposta_tutti",
@@ -562,6 +566,46 @@ async def birthday_checker():
                 save_json(BIRTHDAY_SENT_FILE, birthday_sent)
 
 @bot.tree.command(
+    name="imposta_compleanno_utente",
+    description="Imposta il compleanno di un altro membro"
+)
+@app_commands.describe(utente="Membro a cui impostare il compleanno")
+@app_commands.default_permissions(administrator=True)
+async def imposta_compleanno_utente(interaction: discord.Interaction, utente: discord.Member):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(
+            "Non hai i permessi per usare questo comando.",
+            ephemeral=True
+        )
+        return
+
+    user_id = str(utente.id)
+
+    if user_id in birthdays:
+        data = birthdays[user_id]
+        await interaction.response.send_message(
+            f"{utente.mention} ha già il compleanno impostato al **{data['day']:02d}/{data['month']:02d}**.\n"
+            f"Usa questo comando con il menu per aggiornarlo.",
+            view=BirthdayView(
+                selected_month=data["month"],
+                selected_day=data["day"],
+                mode="edit",
+                target_user_id=utente.id
+            ),
+            ephemeral=True
+        )
+        return
+
+    await interaction.response.send_message(
+        f"Seleziona mese e giorno del compleanno di {utente.mention}:",
+        view=BirthdayView(
+            mode="create",
+            target_user_id=utente.id
+        ),
+        ephemeral=True
+    )
+
+@bot.tree.command(
     name="lista_compleanni",
     description="Mostra la lista dei compleanni salvati"
 )
@@ -619,5 +663,6 @@ if not token:
     raise RuntimeError("Variabile DISCORD_TOKEN non trovata.")
 
 bot.run(token)
+
 
 
